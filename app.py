@@ -10,26 +10,23 @@ st.markdown("""
     <style>
     .stButton > button { width: 100%; border-radius: 12px; padding: 12px; text-align: left; margin-bottom: 10px; }
     .translation-text { color: #888; font-size: 0.9em; margin-top: 5px; border-top: 1px dashed #ccc; padding-top: 5px; }
-    .stChatMessage { border-radius: 15px; margin-bottom: 10px; }
+    .correction-box { background-color: #f0f2f6; padding: 10px; border-radius: 10px; margin-bottom: 15px; border-left: 5px solid #ff4b4b; }
     </style>
     """, unsafe_allow_html=True)
 
 # --- 3. Gemini APIの設定 ---
 if "GEMINI_API_KEY" in st.secrets:
-    # 通信を安定させるため transport='grpc' を指定
     genai.configure(api_key=st.secrets["GEMINI_API_KEY"], transport='grpc')
 else:
     st.error("Secretsに 'GEMINI_API_KEY' を設定してください。")
 
-# ご自身で見つけられた最新モデルを指定
 model = genai.GenerativeModel('gemini-3.1-flash-lite-preview')
 
 # --- 4. サイドバー / 設定スイッチ ---
 with st.sidebar:
     st.title("Coach Settings")
     show_translation = st.checkbox("和訳を表示 (Show Translation)", value=True)
-    st.write("---")
-    if st.button("会話をリセット (Reset Conversation)"):
+    if st.button("会話をリセット"):
         st.session_state.messages = []
         st.session_state.options = []
         st.rerun()
@@ -40,79 +37,94 @@ if "messages" not in st.session_state:
 if "options" not in st.session_state:
     st.session_state.options = []
 
-# --- 6. AIの返信生成関数 ---
-def get_ai_response(prompt_text):
-    # 返信と和訳をJSONで受け取るためのシステム指示
+# --- 6. AIの返信生成（会話用） ---
+def get_ai_chat_response(user_text):
+    chat_history = ""
+    for m in st.session_state.messages:
+        chat_history += f"{m['role']}: {m['en']}\n"
+    
     system_instruction = (
-        "Respond in English as a friendly coach, but also provide a natural Japanese translation. "
+        "You are a friendly English coach. Respond to the user's input naturally in English, and provide a Japanese translation. "
         "Return ONLY a JSON object: {\"en\": \"English response\", \"jp\": \"日本語の訳\"}"
     )
-    full_prompt = f"{system_instruction}\n\nUser input: {prompt_text}"
+    full_prompt = f"{system_instruction}\n\nHistory:\n{chat_history}\nUser: {user_text}"
     
     try:
         res = model.generate_content(full_prompt)
-        # 不要な装飾（```jsonなど）を削除して解析
         clean_text = res.text.replace('```json', '').replace('```', '').strip()
-        data = json.loads(clean_text)
-        return data
+        return json.loads(clean_text)
     except:
-        # エラー時のフォールバック
-        return {"en": res.text, "jp": "(翻訳を取得できませんでした)"}
+        return {"en": res.text, "jp": ""}
 
-# --- 7. 初期挨拶の発動 ---
+# --- 7. ユーザーの入力を添削・提案する関数 ---
+def get_correction_suggestions(user_text):
+    # ユーザーの英語を分析し、修正が必要なら3つ提案、不要なら空リストを返す
+    prompt = (
+        f"Analyze this English input from a learner: '{user_text}'. "
+        "If it's natural and correct, return an empty list: []. "
+        "If it can be improved, suggest 3 more natural versions with Japanese translations. "
+        "Return ONLY a JSON list: [{\"en\": \"...\", \"jp\": \"...\"}, ...]"
+    )
+    try:
+        res = model.generate_content(prompt)
+        clean_text = res.text.replace('```json', '').replace('```', '').strip()
+        return json.loads(clean_text)
+    except:
+        return []
+
+# --- 8. 初期挨拶 ---
 if not st.session_state.messages:
-    with st.spinner("Coach is preparing..."):
-        initial_data = get_ai_response("Hello! Please start a conversation with a short greeting.")
-        st.session_state.messages.append({"role": "assistant", "en": initial_data["en"], "jp": initial_data["jp"]})
+    ai_data = get_ai_chat_response("Hello! Start the conversation.")
+    st.session_state.messages.append({"role": "assistant", "en": ai_data["en"], "jp": ai_data["jp"]})
 
-# 会話履歴の描画
+# 会話履歴の表示
 for msg in st.session_state.messages:
     with st.chat_message(msg["role"]):
         st.write(msg["en"])
-        # スイッチがオン、かつAI（assistant）の発言のみ和訳を表示
-        if show_translation and msg["role"] == "assistant":
+        if show_translation and msg["role"] == "assistant" and msg["jp"]:
             st.markdown(f"<div class='translation-text'>{msg['jp']}</div>", unsafe_allow_html=True)
 
-# --- 8. ユーザー入力エリア ---
-user_input = st.chat_input("英語でメッセージを送る...")
+# --- 9. ユーザー入力処理 ---
+user_input = st.chat_input("英語で返信してみましょう")
 
 if user_input:
-    # ユーザーの発言を履歴に追加
-    st.session_state.messages.append({"role": "user", "en": user_input, "jp": ""})
+    # 1. まず添削（提案）が必要か確認
+    with st.spinner("Checking your English..."):
+        suggestions = get_correction_suggestions(user_input)
     
-    # ユーザー発言に対する「3つの返信候補」を作成
-    analysis_prompt = (
-        f"The user said: '{user_input}'. Suggest 3 natural English sentences they could use next with Japanese translations. "
-        "Return ONLY a JSON list: [{\"en\": \"...\", \"jp\": \"...\"}, {\"en\": \"...\", \"jp\": \"...\"}, {\"en\": \"...\", \"jp\": \"...\"}]"
-    )
-    
-    try:
-        res_opt = model.generate_content(analysis_prompt)
-        clean_opt = res_opt.text.replace('```json', '').replace('```', '').strip()
-        st.session_state.options = json.loads(clean_opt)
-    except:
+    if suggestions:
+        # 修正案がある場合は、まだ履歴には追加せず、選択肢を表示して待機
+        st.session_state.options = suggestions
+        st.session_state.current_draft = user_input # 下書きとして保存
+        st.rerun()
+    else:
+        # 修正案がない（完璧な）場合は、そのまま会話を進める
+        st.session_state.messages.append({"role": "user", "en": user_input, "jp": ""})
+        with st.spinner("Coach is replying..."):
+            ai_data = get_ai_chat_response(user_input)
+            st.session_state.messages.append({"role": "assistant", "en": ai_data["en"], "jp": ai_data["jp"]})
         st.session_state.options = []
+        st.rerun()
 
-    # AI先生としての返信を作成
-    with st.spinner("Thinking..."):
-        ai_data = get_ai_response(user_input)
-        st.session_state.messages.append({"role": "assistant", "en": ai_data["en"], "jp": ai_data["jp"]})
-    
-    st.rerun()
-
-# --- 9. 提案（Suggestion）ボタンの表示 ---
+# --- 10. 添削・選択肢の表示 ---
 if st.session_state.options:
     st.write("---")
-    st.caption("💡 あなたへの提案 (クリックで返信):")
+    st.markdown("<div class='correction-box'>💡 より自然な表現があります。どれを使いますか？</div>", unsafe_allow_html=True)
+    
+    # 元の文章で進むボタンも用意
+    if st.button(f"そのまま送信する: {st.session_state.get('current_draft', '')}"):
+        original_text = st.session_state.current_draft
+        st.session_state.messages.append({"role": "user", "en": original_text, "jp": ""})
+        ai_data = get_ai_chat_response(original_text)
+        st.session_state.messages.append({"role": "assistant", "en": ai_data["en"], "jp": ai_data["jp"]})
+        st.session_state.options = []
+        st.rerun()
+
+    # 提案された選択肢ボタン
     for i, opt in enumerate(st.session_state.options):
-        # 英語と日本語をセットにしたボタン
-        button_label = f"{opt['en']}\n({opt['jp']})"
-        if st.button(button_label, key=f"opt_{i}"):
-            # ボタンを押したら、それをユーザーの発言として扱う
+        if st.button(f"{opt['en']}\n({opt['jp']})", key=f"opt_{i}"):
             st.session_state.messages.append({"role": "user", "en": f"✅ {opt['en']}", "jp": ""})
-            with st.spinner("Coach is replying..."):
-                ai_data = get_ai_response(f"The user selected this option: {opt['en']}")
-                st.session_state.messages.append({"role": "assistant", "en": ai_data["en"], "jp": ai_data["jp"]})
-            # 次のターンのために提案をクリア
+            ai_data = get_ai_chat_response(opt['en'])
+            st.session_state.messages.append({"role": "assistant", "en": ai_data["en"], "jp": ai_data["jp"]})
             st.session_state.options = []
             st.rerun()
