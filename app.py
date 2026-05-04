@@ -19,7 +19,8 @@ else:
     st.error("Secretsに 'GEMINI_API_KEY' を設定してください。")
 
 # モデルの指定をシンプルに修正
-model = genai.GenerativeModel('gemini-1.5-flash')
+#model = genai.GenerativeModel('gemini-1.5-flash')
+model = genai.GenerativeModel('gemini-1.0-pro')
 
 # --- 4. セッション状態の初期化 ---
 if "messages" not in st.session_state:
