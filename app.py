@@ -12,15 +12,15 @@ st.markdown("""
     </style>
     """, unsafe_allow_html=True)
 
-# --- 3. Gemini APIの設定（ここが修正ポイント） ---
+# --- 3. Gemini APIの設定 ---
+# transport='grpc' を追加して通信を安定させます
 if "GEMINI_API_KEY" in st.secrets:
-    genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
+    genai.configure(api_key=st.secrets["GEMINI_API_KEY"], transport='grpc')
 else:
     st.error("Secretsに 'GEMINI_API_KEY' を設定してください。")
 
-# モデルの指定をシンプルに修正
-#model = genai.GenerativeModel('gemini-1.5-flash')
-model = genai.GenerativeModel('gemini-1.0-pro')
+# モデル名を最も確実に認識される形式に変更
+model = genai.GenerativeModel('models/gemini-1.5-flash-latest')
 
 # --- 4. セッション状態の初期化 ---
 if "messages" not in st.session_state:
@@ -31,8 +31,8 @@ if "options" not in st.session_state:
 # --- 5. AIの初期挨拶 ---
 if not st.session_state.messages:
     try:
-        initial_prompt = "You are a friendly English teacher. Start a conversation with a short greeting."
-        # 日本語が含まれるとエラーになる場合があるため、英語でリクエスト
+        # 指示をシンプルにしてエラーを回避
+        initial_prompt = "Hello! I am your friendly English coach. Let's start our conversation with a short greeting!"
         response = model.generate_content(initial_prompt)
         st.session_state.messages.append({"role": "assistant", "content": response.text})
     except Exception as e:
@@ -54,11 +54,12 @@ if user_input:
     
     try:
         res = model.generate_content(analysis_prompt)
-        # JSONを抽出
         text = res.text
+        # JSON部分を抽出する処理
         start = text.find('[')
         end = text.rfind(']') + 1
-        st.session_state.options = json.loads(text[start:end])
+        if start != -1 and end != 0:
+            st.session_state.options = json.loads(text[start:end])
     except:
         st.session_state.options = []
     st.rerun()
@@ -66,11 +67,14 @@ if user_input:
 # --- 7. 選択肢の表示 ---
 if st.session_state.options:
     st.write("---")
-    st.caption("💡 Suggestion:")
+    st.caption("💡 Suggestion (クリックして返信):")
     for i, opt in enumerate(st.session_state.options):
         if st.button(f"{opt['en']}\n({opt['jp']})", key=f"opt_{i}"):
             st.session_state.messages.append({"role": "user", "content": f"✅ {opt['en']}"})
-            next_res = model.generate_content(f"The user chose: '{opt['en']}'. Continue the talk.")
-            st.session_state.messages.append({"role": "assistant", "content": next_res.text})
+            try:
+                next_res = model.generate_content(f"The user chose: '{opt['en']}'. Continue the conversation in English.")
+                st.session_state.messages.append({"role": "assistant", "content": next_res.text})
+            except:
+                st.error("AIからの返信に失敗しました。")
             st.session_state.options = []
             st.rerun()
