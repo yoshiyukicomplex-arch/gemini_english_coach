@@ -45,7 +45,7 @@ if "GEMINI_API_KEY" in st.secrets:
 else:
     st.error("APIキーが設定されていません。StreamlitのSecretsに 'GEMINI_API_KEY' を追加してください。")
 
-model = genai.GenerativeModel('gemini-1.5-flash')
+model = genai.GenerativeModel('gemini-pro')
 
 # --- 4. セッション状態の初期化 ---
 if "messages" not in st.session_state:
