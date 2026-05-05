@@ -1,6 +1,8 @@
 import streamlit as st
 import google.generativeai as genai
 import json
+from gtts import gTTS
+import io
 
 # --- 1. ページ設定 ---
 st.set_page_config(page_title="Gemini English Coach", page_icon="🎧")
@@ -22,22 +24,31 @@ else:
 
 model = genai.GenerativeModel('gemini-3.1-flash-lite-preview')
 
-# --- 4. サイドバー / 設定スイッチ ---
+# --- 4. 音声生成関数 ---
+def speak(text):
+    if text:
+        tts = gTTS(text=text, lang='en')
+        fp = io.BytesIO()
+        tts.write_to_fp(fp)
+        return fp
+
+# --- 5. サイドバー / 設定スイッチ ---
 with st.sidebar:
     st.title("Coach Settings")
     show_translation = st.checkbox("和訳を表示 (Show Translation)", value=True)
+    auto_speak = st.checkbox("音声を自動生成 (Auto Speech)", value=True)
     if st.button("会話をリセット"):
         st.session_state.messages = []
         st.session_state.options = []
         st.rerun()
 
-# --- 5. セッション状態の初期化 ---
+# --- 6. セッション状態の初期化 ---
 if "messages" not in st.session_state:
     st.session_state.messages = []
 if "options" not in st.session_state:
     st.session_state.options = []
 
-# --- 6. AIの返信生成（会話用） ---
+# --- 7. AIの返信生成（会話用） ---
 def get_ai_chat_response(user_text):
     chat_history = ""
     for m in st.session_state.messages:
@@ -56,9 +67,8 @@ def get_ai_chat_response(user_text):
     except:
         return {"en": res.text, "jp": ""}
 
-# --- 7. ユーザーの入力を添削・提案する関数 ---
+# --- 8. ユーザーの入力を添削・提案する関数 ---
 def get_correction_suggestions(user_text):
-    # ユーザーの英語を分析し、修正が必要なら3つ提案、不要なら空リストを返す
     prompt = (
         f"Analyze this English input from a learner: '{user_text}'. "
         "If it's natural and correct, return an empty list: []. "
@@ -72,7 +82,7 @@ def get_correction_suggestions(user_text):
     except:
         return []
 
-# --- 8. 初期挨拶 ---
+# --- 9. 初期挨拶 ---
 if not st.session_state.messages:
     ai_data = get_ai_chat_response("Hello! Start the conversation.")
     st.session_state.messages.append({"role": "assistant", "en": ai_data["en"], "jp": ai_data["jp"]})
@@ -83,22 +93,23 @@ for msg in st.session_state.messages:
         st.write(msg["en"])
         if show_translation and msg["role"] == "assistant" and msg["jp"]:
             st.markdown(f"<div class='translation-text'>{msg['jp']}</div>", unsafe_allow_html=True)
+        # AIのメッセージに音声プレイヤーを表示
+        if msg["role"] == "assistant" and auto_speak:
+            audio_fp = speak(msg["en"])
+            st.audio(audio_fp, format='audio/mp3')
 
-# --- 9. ユーザー入力処理 ---
+# --- 10. ユーザー入力処理 ---
 user_input = st.chat_input("英語で返信してみましょう")
 
 if user_input:
-    # 1. まず添削（提案）が必要か確認
     with st.spinner("Checking your English..."):
         suggestions = get_correction_suggestions(user_input)
     
     if suggestions:
-        # 修正案がある場合は、まだ履歴には追加せず、選択肢を表示して待機
         st.session_state.options = suggestions
-        st.session_state.current_draft = user_input # 下書きとして保存
+        st.session_state.current_draft = user_input
         st.rerun()
     else:
-        # 修正案がない（完璧な）場合は、そのまま会話を進める
         st.session_state.messages.append({"role": "user", "en": user_input, "jp": ""})
         with st.spinner("Coach is replying..."):
             ai_data = get_ai_chat_response(user_input)
@@ -106,12 +117,11 @@ if user_input:
         st.session_state.options = []
         st.rerun()
 
-# --- 10. 添削・選択肢の表示 ---
+# --- 11. 添削・選択肢の表示 ---
 if st.session_state.options:
     st.write("---")
     st.markdown("<div class='correction-box'>💡 より自然な表現があります。どれを使いますか？</div>", unsafe_allow_html=True)
     
-    # 元の文章で進むボタンも用意
     if st.button(f"そのまま送信する: {st.session_state.get('current_draft', '')}"):
         original_text = st.session_state.current_draft
         st.session_state.messages.append({"role": "user", "en": original_text, "jp": ""})
@@ -120,7 +130,6 @@ if st.session_state.options:
         st.session_state.options = []
         st.rerun()
 
-    # 提案された選択肢ボタン
     for i, opt in enumerate(st.session_state.options):
         if st.button(f"{opt['en']}\n({opt['jp']})", key=f"opt_{i}"):
             st.session_state.messages.append({"role": "user", "en": f"✅ {opt['en']}", "jp": ""})
