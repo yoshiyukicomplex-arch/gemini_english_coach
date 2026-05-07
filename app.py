@@ -44,7 +44,6 @@ def get_audio(text):
     except: return None
 
 def get_ai_response(user_text):
-    # 直近の履歴に絞ってレスポンス速度を維持
     history = "\n".join([f"{m['role']}: {m['en']}" for m in st.session_state.messages[-5:]])
     prompt = "Friendly English coach. Respond briefly. JSON ONLY: {\"en\": \"...\", \"jp\": \"...\"}"
     res = model.generate_content(f"{prompt}\n\nHistory:\n{history}\nUser: {user_text}")
@@ -87,9 +86,8 @@ with st.sidebar:
     
     st.write("---")
     st.title("Coach Settings")
-    # 和文オンオフスイッチの復活
     show_translation = st.checkbox("和訳を表示", value=True)
-    auto_speak = st.checkbox("音声を自動再生", value=True)
+    auto_speak = st.checkbox("音声を自動生成", value=True)
     
     st.write("---")
     if st.button("👋 新しい会話を始める"):
@@ -107,7 +105,6 @@ for i, msg in enumerate(st.session_state.messages):
     with st.chat_message(msg["role"]):
         st.write(msg["en"])
         
-        # 和訳表示スイッチがONの時だけ表示
         if show_translation and msg.get("jp"):
             st.markdown(f"<div class='translation-text'>{msg['jp']}</div>", unsafe_allow_html=True)
             
@@ -115,8 +112,7 @@ for i, msg in enumerate(st.session_state.messages):
             audio = get_audio(msg["en"])
             if audio: st.audio(audio, format='audio/mp3')
         
-        # 操作パネル (⭐は自分・AI両方に表示)
+        # 操作パネル
         c1, c2 = st.columns([0.1, 0.1])
         with c1:
-            if st.button("⭐", key=f"s_{i}"):
-                if msg["en"] not in st.session_state.vocab_list:
+            if st.button("⭐", key
