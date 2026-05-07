@@ -36,6 +36,7 @@ model = genai.GenerativeModel('gemini-3.1-flash-lite-preview')
 # --- 5. 機能関数 ---
 @st.cache_data(show_spinner=False)
 def get_audio(text):
+    if not text: return None
     try:
         tts = gTTS(text=text, lang='en')
         fp = io.BytesIO()
@@ -44,11 +45,15 @@ def get_audio(text):
     except: return None
 
 def get_ai_response(user_text):
-    history = "\n".join([f"{m['role']}: {m['en']}" for m in st.session_state.messages[-5:]])
-    prompt = "Friendly English coach. Respond briefly. JSON ONLY: {\"en\": \"...\", \"jp\": \"...\"}"
-    res = model.generate_content(f"{prompt}\n\nHistory:\n{history}\nUser: {user_text}")
-    clean_text = res.text.replace('```json', '').replace('```', '').strip()
-    return json.loads(clean_text)
+    # 文脈を維持しつつ負荷を減らすため直近履歴のみ送信
+    history = "\n".join([f"{m['role']}: {m['en']}" for m in st.session_state.messages[-3:]])
+    prompt = "You are a friendly English coach. Respond briefly. Return ONLY JSON: {\"en\": \"...\", \"jp\": \"...\"}"
+    try:
+        res = model.generate_content(f"{prompt}\n\nHistory:\n{history}\nUser: {user_text}")
+        clean_text = res.text.replace('```json', '').replace('```', '').strip()
+        return json.loads(clean_text)
+    except Exception as e:
+        return {"en": "I'm a bit tired. Let's talk again in a few minutes!", "jp": "少し疲れました。数分後にまた話しましょう！"}
 
 # --- 6. 初期化と永続化 ---
 if "initialized" not in st.session_state:
@@ -87,7 +92,7 @@ with st.sidebar:
     st.write("---")
     st.title("Coach Settings")
     show_translation = st.checkbox("和訳を表示", value=True)
-    auto_speak = st.checkbox("音声を自動生成", value=True)
+    auto_speak = st.checkbox("音声を自動再生", value=True)
     
     st.write("---")
     if st.button("👋 新しい会話を始める"):
@@ -104,15 +109,12 @@ if not st.session_state.messages:
 for i, msg in enumerate(st.session_state.messages):
     with st.chat_message(msg["role"]):
         st.write(msg["en"])
-        
         if show_translation and msg.get("jp"):
             st.markdown(f"<div class='translation-text'>{msg['jp']}</div>", unsafe_allow_html=True)
-            
         if msg["role"] == "assistant" and auto_speak:
             audio = get_audio(msg["en"])
             if audio: st.audio(audio, format='audio/mp3')
         
-        # 操作パネル
         c1, c2 = st.columns([0.1, 0.1])
         with c1:
             if st.button("⭐", key=f"s_{i}"):
@@ -130,9 +132,10 @@ for i, msg in enumerate(st.session_state.messages):
 user_input = st.chat_input("Reply in English...")
 
 if user_input:
+    # 添削用プロンプト
     check_prompt = f'''Analyze: "{user_input}". If natural, return []. Else, 3 suggestions. JSON ONLY: [{{"en": "...", "jp": "...", "why": "..."}}]'''
-    res = model.generate_content(check_prompt)
     try:
+        res = model.generate_content(check_prompt)
         suggestions = json.loads(res.text.replace('```json', '').replace('```', '').strip())
     except: suggestions = []
 
