@@ -3,31 +3,40 @@ import google.generativeai as genai
 import json
 from gtts import gTTS
 import io
+from streamlit_javascript import st_javascript
 
 # --- 1. ページ設定 ---
 st.set_page_config(page_title="Gemini English Coach", page_icon="🎧", layout="wide")
 
-# --- 2. デザイン (CSS) ---
+# --- 2. ブラウザ保存用の関数 ---
+def save_to_local(key, value):
+    json_value = json.dumps(value, ensure_ascii=False)
+    st_javascript(f"localStorage.setItem('{key}', JSON.stringify({json_value}));")
+
+def load_from_local(key):
+    result = st_javascript(f"JSON.parse(localStorage.getItem('{key}'));")
+    return result
+
+# --- 3. デザイン (CSS) ---
 st.markdown("""
     <style>
     .stButton > button { width: 100%; border-radius: 12px; padding: 12px; text-align: left; margin-bottom: 5px; }
     .translation-text { color: #888; font-size: 0.85em; margin-top: 5px; border-top: 1px dashed #ccc; padding-top: 5px; }
     .correction-box { background-color: #f0f2f6; padding: 15px; border-radius: 12px; margin-bottom: 15px; border-left: 5px solid #ff4b4b; }
     .vocab-detail-box { background-color: #fdfdfe; border: 1px solid #e1e4e8; padding: 15px; border-radius: 10px; margin-top: 10px; white-space: pre-wrap; }
-    .explanation-text { background-color: #fff3cd; color: #856404; padding: 10px; border-radius: 8px; font-size: 0.9em; margin-bottom: 10px; border: 1px solid #ffeeba; }
+    .delete-btn > button { color: #ff4b4b; border: 1px solid #ff4b4b; padding: 2px 8px; font-size: 0.8em; width: auto; }
     </style>
     """, unsafe_allow_html=True)
 
-# --- 3. Gemini APIの設定 ---
+# --- 4. Gemini APIの設定 ---
 if "GEMINI_API_KEY" in st.secrets:
     genai.configure(api_key=st.secrets["GEMINI_API_KEY"], transport='grpc')
 else:
     st.error("Secretsに 'GEMINI_API_KEY' を設定してください。")
 
-# 最新モデルを指定
 model = genai.GenerativeModel('gemini-3.1-flash-lite-preview')
 
-# --- 4. 便利関数 ---
+# --- 5. 便利関数 ---
 def speak(text):
     try:
         tts = gTTS(text=text, lang='en')
@@ -43,85 +52,100 @@ def get_ai_chat_response(user_text):
         res = model.generate_content(f"{prompt}\n\nHistory:\n{history}\nUser: {user_text}")
         clean_text = res.text.replace('```json', '').replace('```', '').strip()
         return json.loads(clean_text)
-    except: return {"en": res.text, "jp": ""}
+    except: return {"en": "Error occurred.", "jp": ""}
 
-# --- 5. セッション初期化 ---
-if "messages" not in st.session_state: st.session_state.messages = []
-if "options" not in st.session_state: st.session_state.options = []
-if "vocab_list" not in st.session_state: st.session_state.vocab_list = []
-if "vocab_detail" not in st.session_state: st.session_state.vocab_detail = ""
+# --- 6. セッションとデータの初期化 ---
+if "initialized" not in st.session_state:
+    st.session_state.messages = []
+    st.session_state.vocab_list = []
+    st.session_state.options = []
+    st.session_state.vocab_detail = ""
+    st.session_state.initialized = True
 
-# --- 6. サイドバー（単語・述語帳） ---
+# ブラウザからデータを読み込む（JSの実行を待つために1度だけ試行）
+if not st.session_state.messages:
+    stored_msgs = load_from_local("eng_coach_messages")
+    if stored_msgs: st.session_state.messages = stored_msgs
+
+if not st.session_state.vocab_list:
+    stored_vocab = load_from_local("eng_coach_vocab")
+    if stored_vocab: st.session_state.vocab_list = stored_vocab
+
+# --- 7. サイドバー（単語・述語帳 & 設定） ---
 with st.sidebar:
-    st.title("📚 Phrase & Vocab List")
-    st.caption("保存したメッセージから述語や重要単語を抽出します")
-    
-    if not st.session_state.vocab_list:
-        st.info("チャット内の ⭐ボタン で保存してください")
-    else:
+    st.title("📚 Phrase List")
+    if st.session_state.vocab_list:
         for i, item in enumerate(st.session_state.vocab_list):
-            if st.button(f"📖 {item[:25]}...", key=f"vocab_{i}"):
-                with st.spinner("Analyzing phrases & verbs..."):
-                    analysis_prompt = (
-                        f"Extract and explain 3-4 key items from this sentence: '{item}'.\n"
-                        "Focus on:\n"
-                        "1. Important predicates (verbs/phrasal verbs)\n"
-                        "2. Useful idioms\n"
-                        "3. Essential vocabulary\n"
-                        "Format the output in Japanese with: 【項目】(発音) 意味 / 例文"
-                    )
-                    res = model.generate_content(analysis_prompt)
-                    st.session_state.vocab_detail = res.text
+            col_v1, col_v2 = st.columns([0.8, 0.2])
+            with col_v1:
+                if st.button(f"📖 {item[:20]}...", key=f"vocab_{i}"):
+                    with st.spinner("Analyzing..."):
+                        res = model.generate_content(f"Extract key predicates and idioms from: '{item}'. Explain in Japanese.")
+                        st.session_state.vocab_detail = res.text
+            with col_v2:
+                # 単語帳の個別削除
+                if st.button("🗑️", key=f"del_v_{i}"):
+                    st.session_state.vocab_list.pop(i)
+                    save_to_local("eng_coach_vocab", st.session_state.vocab_list)
+                    st.rerun()
         
         if st.session_state.vocab_detail:
-            st.markdown("---")
-            st.markdown("### 💡 Analysis Result")
             st.markdown(f"<div class='vocab-detail-box'>{st.session_state.vocab_detail}</div>", unsafe_allow_html=True)
             if st.button("詳細を閉じる"):
-                st.session_state.vocab_detail = ""
-                st.rerun()
+                st.session_state.vocab_detail = ""; st.rerun()
 
     st.markdown("---")
     st.title("Coach Settings")
     show_translation = st.checkbox("和訳を表示", value=True)
     auto_speak = st.checkbox("音声を自動生成", value=True)
-    if st.button("会話をリセット"):
-        st.session_state.messages = []; st.session_state.options = []; st.session_state.vocab_list = []; st.rerun()
+    
+    if st.button("👋 新しい会話を始める"):
+        st.session_state.messages = []
+        save_to_local("eng_coach_messages", [])
+        st.rerun()
 
-# --- 7. メイン画面（チャット） ---
+# --- 8. メイン画面（チャット） ---
 if not st.session_state.messages:
     ai_data = get_ai_chat_response("Hello!")
     st.session_state.messages.append({"role": "assistant", "en": ai_data["en"], "jp": ai_data["jp"]})
+    save_to_local("eng_coach_messages", st.session_state.messages)
 
-for msg in st.session_state.messages:
+# チャット履歴の描画
+for i, msg in enumerate(st.session_state.messages):
     with st.chat_message(msg["role"]):
         st.write(msg["en"])
         if show_translation and msg["role"] == "assistant":
             st.markdown(f"<div class='translation-text'>{msg['jp']}</div>", unsafe_allow_html=True)
         
-        if msg["role"] == "assistant":
-            col_a, col_b = st.columns([0.7, 0.3])
-            with col_a:
-                if auto_speak: st.audio(speak(msg["en"]), format='audio/mp3')
-            with col_b:
-                if st.button("⭐ 保存", key=f"save_{hash(msg['en'])}"):
+        # 操作パネル（音声・保存・削除）
+        col_c1, col_c2, col_c3 = st.columns([0.6, 0.2, 0.2])
+        with col_c1:
+            if msg["role"] == "assistant" and auto_speak:
+                st.audio(speak(msg["en"]), format='audio/mp3')
+        with col_c2:
+            if msg["role"] == "assistant":
+                if st.button("⭐", key=f"save_{i}", help="単語帳へ"):
                     if msg["en"] not in st.session_state.vocab_list:
                         st.session_state.vocab_list.append(msg["en"])
-                        st.toast("フレーズを保存しました！")
+                        save_to_local("eng_coach_vocab", st.session_state.vocab_list)
+                        st.toast("保存！")
+        with col_c3:
+            # 個別削除ボタン
+            if st.button("🗑️", key=f"del_msg_{i}", help="このメッセージを削除"):
+                st.session_state.messages.pop(i)
+                save_to_local("eng_coach_messages", st.session_state.messages)
+                st.rerun()
 
-# --- 8. 入力と提案ロジック ---
+# --- 9. 入力と提案ロジック ---
 user_input = st.chat_input("英語で返信...")
 
 if user_input:
     with st.spinner("Checking..."):
-        # SyntaxErrorを回避するためにトリプルクォートと二重中括弧 {{ }} を使用
-        prompt = f'''Learner input: "{user_input}". If it is natural, return []. Else, suggest 3 versions. Return ONLY JSON list: [{{"en": "...", "jp": "...", "why": "..."}}, ...]'''
+        prompt = f'''Learner input: "{user_input}". If natural, return []. Else, suggest 3 versions. Return ONLY JSON list: [{{"en": "...", "jp": "...", "why": "..."}}, ...]'''
         try:
             res = model.generate_content(prompt)
-            clean_text = res.text.replace('```json', '').replace('```', '').strip()
-            suggestions = json.loads(clean_text)
-        except:
-            suggestions = []
+            suggestions = json.loads(res.text.replace('```json', '').replace('```', '').strip())
+        except: suggestions = []
     
     if suggestions:
         st.session_state.options = suggestions
@@ -131,27 +155,28 @@ if user_input:
         st.session_state.messages.append({"role": "user", "en": user_input, "jp": ""})
         ai_data = get_ai_chat_response(user_input)
         st.session_state.messages.append({"role": "assistant", "en": ai_data["en"], "jp": ai_data["jp"]})
+        save_to_local("eng_coach_messages", st.session_state.messages)
         st.rerun()
 
-# 提案・選択エリア
+# 提案エリア
 if st.session_state.options:
     st.write("---")
-    st.markdown("<div class='correction-box'>💡 表現をブラッシュアップしましょう</div>", unsafe_allow_html=True)
-    if st.button(f"そのまま送信: {st.session_state.get('current_draft', '')}"):
+    if st.button(f"そのまま送信: {st.session_state.current_draft}"):
         txt = st.session_state.current_draft
         st.session_state.messages.append({"role": "user", "en": txt, "jp": ""})
         ai_data = get_ai_chat_response(txt)
         st.session_state.messages.append({"role": "assistant", "en": ai_data["en"], "jp": ai_data["jp"]})
+        save_to_local("eng_coach_messages", st.session_state.messages)
         st.session_state.options = []; st.rerun()
 
     for i, opt in enumerate(st.session_state.options):
-        col1, col2 = st.columns([0.85, 0.15])
-        with col1:
+        col_opt1, col_opt2 = st.columns([0.85, 0.15])
+        with col_opt1:
             if st.button(f"{opt['en']}\n({opt['jp']})", key=f"btn_{i}"):
                 st.session_state.messages.append({"role": "user", "en": f"✅ {opt['en']}", "jp": ""})
                 ai_data = get_ai_chat_response(opt['en'])
                 st.session_state.messages.append({"role": "assistant", "en": ai_data["en"], "jp": ai_data["jp"]})
+                save_to_local("eng_coach_messages", st.session_state.messages)
                 st.session_state.options = []; st.rerun()
-        with col2:
-            if st.button("❓", key=f"exp_{i}"):
-                st.info(opt['why'])
+        with col_opt2:
+            if st.button("❓", key=f"exp_{i}"): st.info(opt['why'])
