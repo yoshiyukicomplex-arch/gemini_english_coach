@@ -13,7 +13,7 @@ st.markdown("""
     .stButton > button { width: 100%; border-radius: 12px; padding: 12px; text-align: left; margin-bottom: 5px; }
     .translation-text { color: #888; font-size: 0.85em; margin-top: 5px; border-top: 1px dashed #ccc; padding-top: 5px; }
     .correction-box { background-color: #f0f2f6; padding: 15px; border-radius: 12px; margin-bottom: 15px; border-left: 5px solid #ff4b4b; }
-    .vocab-detail-box { background-color: #fdfdfe; border: 1px solid #e1e4e8; padding: 15px; border-radius: 10px; margin-top: 10px; }
+    .vocab-detail-box { background-color: #fdfdfe; border: 1px solid #e1e4e8; padding: 15px; border-radius: 10px; margin-top: 10px; white-space: pre-wrap; }
     .explanation-text { background-color: #fff3cd; color: #856404; padding: 10px; border-radius: 8px; font-size: 0.9em; margin-bottom: 10px; border: 1px solid #ffeeba; }
     </style>
     """, unsafe_allow_html=True)
@@ -24,6 +24,7 @@ if "GEMINI_API_KEY" in st.secrets:
 else:
     st.error("Secretsに 'GEMINI_API_KEY' を設定してください。")
 
+# 最新モデルを指定
 model = genai.GenerativeModel('gemini-3.1-flash-lite-preview')
 
 # --- 4. 便利関数 ---
@@ -40,7 +41,8 @@ def get_ai_chat_response(user_text):
     prompt = "You are a friendly English coach. Respond to the user naturally. Return ONLY a JSON object: {\"en\": \"English response\", \"jp\": \"日本語の訳\"}"
     try:
         res = model.generate_content(f"{prompt}\n\nHistory:\n{history}\nUser: {user_text}")
-        return json.loads(res.text.replace('```json', '').replace('```', '').strip())
+        clean_text = res.text.replace('```json', '').replace('```', '').strip()
+        return json.loads(clean_text)
     except: return {"en": res.text, "jp": ""}
 
 # --- 5. セッション初期化 ---
@@ -58,10 +60,8 @@ with st.sidebar:
         st.info("チャット内の ⭐ボタン で保存してください")
     else:
         for i, item in enumerate(st.session_state.vocab_list):
-            # ボタンにはフレーズの冒頭を表示
             if st.button(f"📖 {item[:25]}...", key=f"vocab_{i}"):
                 with st.spinner("Analyzing phrases & verbs..."):
-                    # 述語(Predicates)と重要単語を抽出するプロンプト
                     analysis_prompt = (
                         f"Extract and explain 3-4 key items from this sentence: '{item}'.\n"
                         "Focus on:\n"
@@ -114,11 +114,14 @@ user_input = st.chat_input("英語で返信...")
 
 if user_input:
     with st.spinner("Checking..."):
-        prompt = f"Learner input: '{user_input}'. If natural, return []. Else, suggest 3 versions. Return ONLY JSON list: [{\"en\": \"...\", \"jp\": \"...\", \"why\": \"...\"}, ...]"
+        # SyntaxErrorを回避するためにトリプルクォートと二重中括弧 {{ }} を使用
+        prompt = f'''Learner input: "{user_input}". If it is natural, return []. Else, suggest 3 versions. Return ONLY JSON list: [{{"en": "...", "jp": "...", "why": "..."}}, ...]'''
         try:
             res = model.generate_content(prompt)
-            suggestions = json.loads(res.text.replace('```json', '').replace('```', '').strip())
-        except: suggestions = []
+            clean_text = res.text.replace('```json', '').replace('```', '').strip()
+            suggestions = json.loads(clean_text)
+        except:
+            suggestions = []
     
     if suggestions:
         st.session_state.options = suggestions
