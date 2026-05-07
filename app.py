@@ -13,8 +13,8 @@ st.markdown("""
     .stButton > button { width: 100%; border-radius: 12px; padding: 12px; text-align: left; margin-bottom: 5px; }
     .translation-text { color: #888; font-size: 0.85em; margin-top: 5px; border-top: 1px dashed #ccc; padding-top: 5px; }
     .correction-box { background-color: #f0f2f6; padding: 15px; border-radius: 12px; margin-bottom: 15px; border-left: 5px solid #ff4b4b; }
+    .vocab-detail-box { background-color: #fdfdfe; border: 1px solid #e1e4e8; padding: 15px; border-radius: 10px; margin-top: 10px; }
     .explanation-text { background-color: #fff3cd; color: #856404; padding: 10px; border-radius: 8px; font-size: 0.9em; margin-bottom: 10px; border: 1px solid #ffeeba; }
-    .vocab-card { background-color: #e3f2fd; padding: 10px; border-radius: 8px; margin-bottom: 5px; border-left: 5px solid #2196f3; font-size: 0.9em; cursor: pointer; }
     </style>
     """, unsafe_allow_html=True)
 
@@ -49,22 +49,35 @@ if "options" not in st.session_state: st.session_state.options = []
 if "vocab_list" not in st.session_state: st.session_state.vocab_list = []
 if "vocab_detail" not in st.session_state: st.session_state.vocab_detail = ""
 
-# --- 6. サイドバー（単語帳機能） ---
+# --- 6. サイドバー（単語・述語帳） ---
 with st.sidebar:
-    st.title("📚 Vocabulary List")
+    st.title("📚 Phrase & Vocab List")
+    st.caption("保存したメッセージから述語や重要単語を抽出します")
+    
     if not st.session_state.vocab_list:
-        st.caption("保存された単語はありません")
+        st.info("チャット内の ⭐ボタン で保存してください")
     else:
         for i, item in enumerate(st.session_state.vocab_list):
-            if st.button(f"📖 {item[:20]}...", key=f"vocab_{i}"):
-                with st.spinner("Analyzing words..."):
-                    res = model.generate_content(f"Analyze the important words in this sentence: '{item}'. Provide meanings, pronunciations, and example sentences in Japanese. Return as a clean list.")
+            # ボタンにはフレーズの冒頭を表示
+            if st.button(f"📖 {item[:25]}...", key=f"vocab_{i}"):
+                with st.spinner("Analyzing phrases & verbs..."):
+                    # 述語(Predicates)と重要単語を抽出するプロンプト
+                    analysis_prompt = (
+                        f"Extract and explain 3-4 key items from this sentence: '{item}'.\n"
+                        "Focus on:\n"
+                        "1. Important predicates (verbs/phrasal verbs)\n"
+                        "2. Useful idioms\n"
+                        "3. Essential vocabulary\n"
+                        "Format the output in Japanese with: 【項目】(発音) 意味 / 例文"
+                    )
+                    res = model.generate_content(analysis_prompt)
                     st.session_state.vocab_detail = res.text
         
         if st.session_state.vocab_detail:
             st.markdown("---")
-            st.markdown(f"### Word Details\n{st.session_state.vocab_detail}")
-            if st.button("閉じる"):
+            st.markdown("### 💡 Analysis Result")
+            st.markdown(f"<div class='vocab-detail-box'>{st.session_state.vocab_detail}</div>", unsafe_allow_html=True)
+            if st.button("詳細を閉じる"):
                 st.session_state.vocab_detail = ""
                 st.rerun()
 
@@ -76,26 +89,25 @@ with st.sidebar:
         st.session_state.messages = []; st.session_state.options = []; st.session_state.vocab_list = []; st.rerun()
 
 # --- 7. メイン画面（チャット） ---
-# 初期挨拶
 if not st.session_state.messages:
     ai_data = get_ai_chat_response("Hello!")
     st.session_state.messages.append({"role": "assistant", "en": ai_data["en"], "jp": ai_data["jp"]})
 
-# 履歴表示
 for msg in st.session_state.messages:
     with st.chat_message(msg["role"]):
         st.write(msg["en"])
         if show_translation and msg["role"] == "assistant":
             st.markdown(f"<div class='translation-text'>{msg['jp']}</div>", unsafe_allow_html=True)
+        
         if msg["role"] == "assistant":
             col_a, col_b = st.columns([0.7, 0.3])
             with col_a:
                 if auto_speak: st.audio(speak(msg["en"]), format='audio/mp3')
             with col_b:
-                if st.button("⭐ 保存", key=f"save_{msg['en'][:10]}"):
+                if st.button("⭐ 保存", key=f"save_{hash(msg['en'])}"):
                     if msg["en"] not in st.session_state.vocab_list:
                         st.session_state.vocab_list.append(msg["en"])
-                        st.toast("単語帳に保存しました！")
+                        st.toast("フレーズを保存しました！")
 
 # --- 8. 入力と提案ロジック ---
 user_input = st.chat_input("英語で返信...")
