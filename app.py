@@ -115,4 +115,53 @@ for i, msg in enumerate(st.session_state.messages):
         # 操作パネル
         c1, c2 = st.columns([0.1, 0.1])
         with c1:
-            if st.button("⭐", key
+            if st.button("⭐", key=f"s_{i}"):
+                if msg["en"] not in st.session_state.vocab_list:
+                    st.session_state.vocab_list.append(msg["en"])
+                    save_local("vocab_v3", st.session_state.vocab_list)
+                    st.toast("Saved!")
+        with c2:
+            if st.button("🗑️", key=f"d_{i}"):
+                st.session_state.messages.pop(i)
+                save_local("msgs_v3", st.session_state.messages)
+                st.rerun()
+
+# --- 9. 入力と添削 ---
+user_input = st.chat_input("Reply in English...")
+
+if user_input:
+    check_prompt = f'''Analyze: "{user_input}". If natural, return []. Else, 3 suggestions. JSON ONLY: [{{"en": "...", "jp": "...", "why": "..."}}]'''
+    res = model.generate_content(check_prompt)
+    try:
+        suggestions = json.loads(res.text.replace('```json', '').replace('```', '').strip())
+    except: suggestions = []
+
+    if suggestions:
+        st.session_state.options = suggestions
+        st.session_state.current_draft = user_input
+        st.rerun()
+    else:
+        st.session_state.messages.append({"role": "user", "en": user_input})
+        ai = get_ai_response(user_input)
+        st.session_state.messages.append({"role": "assistant", "en": ai["en"], "jp": ai["jp"]})
+        save_local("msgs_v3", st.session_state.messages)
+        st.rerun()
+
+# 添削オプション
+if st.session_state.options:
+    st.write("---")
+    if st.button(f"そのまま送信: {st.session_state.current_draft}"):
+        txt = st.session_state.current_draft
+        st.session_state.messages.append({"role": "user", "en": txt})
+        ai = get_ai_response(txt)
+        st.session_state.messages.append({"role": "assistant", "en": ai["en"], "jp": ai["jp"]})
+        save_local("msgs_v3", st.session_state.messages)
+        st.session_state.options = []; st.rerun()
+
+    for i, opt in enumerate(st.session_state.options):
+        if st.button(f"{opt['en']} ({opt['jp']})", key=f"opt_{i}"):
+            st.session_state.messages.append({"role": "user", "en": opt['en']})
+            ai = get_ai_response(opt['en'])
+            st.session_state.messages.append({"role": "assistant", "en": ai["en"], "jp": ai['jp']})
+            save_local("msgs_v3", st.session_state.messages)
+            st.session_state.options = []; st.rerun()
